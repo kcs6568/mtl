@@ -1,0 +1,38 @@
+setup: 'single_task'
+method: 'baseline'
+
+backbone: 'resnet50'
+detector: null
+segmentor: 'fcn'
+
+state_dict: 
+  stem: '/root/volume/pre_weights/resnet50_IM1K_only_stem.pth'
+  backbone: '/root/volume/pre_weights/resnet50_IM1K_only_layer.pth'
+  # stem: null
+  # backbone: null
+
+task_cfg:
+  cityscapes:
+    task: 'seg'
+    num_classes: 19
+    crop_size: 512
+    use_fpn: False
+    stem:
+      kernel_size: 7
+      stride: 2
+      padding: 3
+    backbone:
+      dilation_type: ftt
+      freeze_bn: False
+      return_layer:
+        - 'layer3'
+        - 'layer4'
+    head:
+      in_channels: 2048
+      num_classes: 19
+      use_aux: True
+
+epochs: 12
+lr_steps: [8, 11]
+aspect-ratio-group-factor: 3
+print_freq: 10

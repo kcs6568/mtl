@@ -1,0 +1,99 @@
+setup: 'multi_task'
+method: 'cross_stitch'
+
+backbone: 'resnet50'
+detector: 'fasterrcnn'
+segmentor: 'fcn'
+
+use_minids: True
+
+state_dict: 
+  stem: '/root/volume/pre_weights/resnet50_IM1K_only_stem.pth'
+  backbone: '/root/volume/pre_weights/resnet50_IM1K_only_layer.pth'
+  # stem: null
+  # backbone: null
+
+task_cfg:
+  cifar10:
+    task: 'clf'
+    num_classes: 10
+    use_fpn: False
+    stem:
+      kernel_size: 3
+      stride: 1
+      padding: 1
+    backbone:
+      dilation_type: fff
+      freeze_bn: False
+      return_layer:
+        - 'layer4'
+
+  stl10:
+    task: 'clf'
+    num_classes: 10
+    input_size: 96
+    use_fpn: False
+    stem:
+      kernel_size: 1
+      stride: 3
+      padding: 0
+    backbone:
+      dilation_type: fff
+      freeze_bn: False
+      return_layer: 
+        - 'layer4'
+
+  minicoco:
+    task: 'det'
+    num_classes: 91
+    use_fpn: True
+    backbone:
+      dilation_type: fff
+      freeze_bn: True
+      return_layer:
+        - 'layer1'
+        - 'layer2'
+        - 'layer3'
+        - 'layer4'
+  
+  voc:
+    task: 'seg'
+    num_classes: 21
+    use_fpn: False
+    task_cfg:
+      train:
+        year: '0712'
+        task: 'trainval'
+      test:
+        year: '2007'
+        task: 'test'
+    stem:
+      kernel_size: 7
+      stride: 2
+      padding: 3
+    backbone:
+      dilation_type: ftt
+      freeze_bn: False
+      return_layer:
+        - 'layer3'
+        - 'layer4'
+    head:
+      in_channels: 2048
+      num_classes: 21
+      use_aux: True
+
+
+cross_stitch_kwargs: 
+    alpha: 0.9
+    beta: 0.1
+    stages: ['layer1', 'layer2', 'layer3', 'layer4']
+    channels:
+        layer1: 256
+        layer2: 512
+        layer3: 1024
+        layer4: 2048
+
+epochs: 12
+aspect-ratio-group-factor: 3
+print_freq: 50
+

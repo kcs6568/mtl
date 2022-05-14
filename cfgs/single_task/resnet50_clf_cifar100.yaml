@@ -1,0 +1,24 @@
+setup: 'single_task'
+backbone: 'resnet50'
+detector: null
+segmentor: null
+
+state_dict: 
+  stem: '/root/volume/pre_weights/resnet50_IM1K_only_stem.pth'
+  backbone: '/root/volume/pre_weights/resnet50_IM1K_only_layer.pth'
+  # stem: null
+  # backbone: null
+
+task_cfg:
+  clf: 
+    type: 'cifar100'
+    num_classes: 100
+    input_size: 32
+    bs: 4
+  det: null
+  seg: null
+    
+
+epochs: 12
+lr_steps: [8, 11]
+print_freq: 50

@@ -1,0 +1,18 @@
+use_minids: True
+setup: 'single_task'
+backbone: 'resnet50'
+detector: 'fasterrcnn'
+
+task_cfg:
+  clf: null
+  det:
+    type: 'coco'
+    num_classes: 91
+    bs: 4
+  seg: null
+
+epochs: 12
+# lr_steps: [8, 11]
+aspect-ratio-group-factor: 3
+print_freq: 50
+

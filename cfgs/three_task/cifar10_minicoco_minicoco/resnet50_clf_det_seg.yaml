@@ -1,0 +1,43 @@
+# dataset:
+#   type: 'cifar10'
+#   det: 'coco'
+
+# task_bs:
+#   clf: 2
+#   det: 1
+
+# task: ['det']
+
+use_minids: True
+use_origin: null
+
+backbone: 'resnet50'
+detector: 'fasterrcnn'
+segmentor: 'fcn'
+
+state_dict: 
+  stem: '/root/volume/ckpts/resnet50_IM1K_only_stem.pth'
+  backbone: '/root/volume/ckpts/resnet50_IM1K_only_layer.pth'
+  # stem: null
+  # backbone: null
+
+task_cfg:
+  clf: 
+    type: 'cifar10'
+    num_classes: 10
+    bs: 4
+
+  det:
+    type: 'coco'
+    num_classes: 91
+    bs: 3
+  
+  seg:
+    type: 'coco'
+    num_classes: 91
+    bs: 3
+
+epochs: 12
+aspect-ratio-group-factor: 3
+print_freq: 50
+
