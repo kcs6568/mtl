@@ -26,38 +26,45 @@ def init_weights(m):
         nn.init.constant_(m.bias, 0)
 
 
-def make_stem(task, cfg, stem_weight=None):
+def make_stem(task, cfg, backbone=None, stem_weight=None):
     if task == 'clf':
         stem = ClfStem(**cfg['stem'])
         stem.apply(init_weights)
     
     elif task == 'det':
-        stem = DetStem()
+        stem = DetStem(**cfg['stem'])
         if stem_weight is not None:
-                ckpt = torch.load(stem_weight)
-                stem.load_state_dict(ckpt)
+            ckpt = torch.load(stem_weight)
+            stem.load_state_dict(ckpt, strict=False)
+        
+        if 'mobilenetv3' in backbone:
+            for p in stem.parameters():
+                p.requires_grad = False
     
     elif task == 'seg':
         stem = SegStem(**cfg['stem'])
         if stem_weight is not None:
             ckpt = torch.load(stem_weight)
-            stem.load_state_dict(ckpt)
+            stem.load_state_dict(ckpt, strict=False)
     
     return stem
     
     
-def make_head(task, cfg, backbone, dense_task):
+def make_head(task, backbone, dense_task, num_classes, fpn_channel=256, head_cfg=None):
     if task == 'clf':
-        head = build_classifier(backbone.last_out_channel, cfg['num_classes'])
+        head = build_classifier(
+            backbone, num_classes, head_cfg)
     
     elif task == 'det':
         head = build_detector(
+            backbone,
             dense_task, 
-            backbone.fpn_out_channels, 
-            cfg['num_classes'])
+            fpn_channel, 
+            num_classes)
     
     elif task == 'seg':
-        head = build_segmentor(dense_task, cfg['head'])
+        head = build_segmentor(
+            dense_task, num_classes, cfg_dict=head_cfg)
     
     head.apply(init_weights)
     return head
@@ -86,19 +93,24 @@ class SingleTaskNetwork(nn.Module):
             backbone, detector, segmentor, kwargs)
         
         self.dset = dataset
-        self.task = task_cfg['task']
+        task = task_cfg['task']
+        # self.task = task_cfg[self.dset]['task']
         
         stem_weight = kwargs['state_dict']['stem']
-        self.stem = make_stem(self.task, task_cfg, stem_weight)
+        self.stem = make_stem(task, task_cfg, backbone, stem_weight)
+        
+        print(task_cfg['head'])
         
         dense_task = detector if detector else segmentor
-        self.head = make_head(self.task, task_cfg, self.backbone, dense_task)
+        self.head = make_head(task, backbone, dense_task,
+                              task_cfg['num_classes'],
+                              head_cfg=task_cfg['head'])
         
-        if self.task == 'clf':
+        if task == 'clf':
             self.task_forward = self._forward_clf
-        elif self.task == 'det':
+        elif task == 'det':
             self.task_forward = self._forward_coco
-        elif self.task == 'seg':
+        elif task == 'seg':
             self.task_forward = self._forward_voc
         
     
@@ -106,32 +118,46 @@ class SingleTaskNetwork(nn.Module):
         stem_feats = self.stem(images)
         backbone_features = self.backbone(stem_feats)
         
+        # print(stem_feats.size())
+        # for k, v in backbone_features.items():
+        #     print(k, v.size())
+        # exit()
+        
         if self.training:
             losses = self.head(backbone_features, targets)
             return losses
         
         else:
-            return self.head({'a': backbone_features})
+            predictions = self.head(backbone_features)
+            
+            return dict(outputs=predictions)
     
     
-    def _forward_coco(self, images, targets):
-        feats, targets = self.stem(images, targets=targets)
+    def _forward_coco(self, images, targets=None):
+        feats = self.stem(images)
         features = self.backbone(feats)
         
         if self.training:
             losses = self.head(images, features, 
-                                       trs_targets=targets, 
-                                       trs_fn=self.det_stem.transform)
+                                origin_targets=targets,
+                                trs_fn=self.stem.transform)
             return losses
         
         else:
-            return self.head(images, features,                                       
-                                       trs_fn=self.det_stem.transform)
+            predictions = self.head(images, features,                                       
+                            trs_fn=self.stem.transform)
             
+            return predictions
+        
     
     def _forward_voc(self, images, targets=None):
         feats = self.stem(images)
         features = self.backbone(feats)
+        
+        # for _, v in features.items():
+        #     print(v.size())
+            
+        # exit()
         
         if self.training:
             losses = self.head(features, targets,
@@ -143,7 +169,7 @@ class SingleTaskNetwork(nn.Module):
                     features, input_shape=images.shape[-2:])
             
             # print(predictions.size())
-            return predictions
+            return dict(outputs=predictions)
             
 
     def _foward_train(self, data_dict):
@@ -154,9 +180,10 @@ class SingleTaskNetwork(nn.Module):
         
     
     def _forward_val(self, images):
+        # print(images)
         prediction_results = self.task_forward(images)
         
-        return dict(outputs=prediction_results)
+        return prediction_results
     
     
     def forward(self, data_dict, kwargs=None):

@@ -165,6 +165,9 @@ def reduce_dict(input_dict, average=True):
             names.append(k)
             values.append(input_dict[k])
         values = torch.stack(values, dim=0)
+        
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
         dist.all_reduce(values) # bottleneck occur
         if average:
             values /= world_size
@@ -478,8 +481,6 @@ def accuracy(output, target, topk=(1,)):
 def get_params(model, logger, print_table=False):
     from prettytable import PrettyTable
     
-    task = ['minicoco', 'cifar10', 'stl10', 'voc', 'cross_stitch']
-    task_params = {t: 0 for t in task}
     table = PrettyTable(["Modules", "Parameters"])
     total_params = 0
 
@@ -488,37 +489,15 @@ def get_params(model, logger, print_table=False):
         params = parameter.numel()
         table.add_row([name, params])
         total_params+=params
-        
-        if not task[4] in name:
-            if task[0] in name:
-                task_params[task[0]] += params
-            elif task[1] in name:
-                task_params[task[1]] += params
-            elif task[2] in name:
-                task_params[task[2]] += params
-            elif task[3] in name:
-                task_params[task[3]] += params
-        else:
-            task_params[task[4]] += params
-        
-        # task_params.update({t: task_params[t]+params for t in task if t in name})
-    
     
     param_log = "<Model Learnable Parameter>"
     
-    task_params.update({t: str(round(v*1e-6, 2))+'M' for t, v in task_params.items()})
-    print(task_params)
-    # exit()    
     if print_table:
         param_log += f"\n{table}\t"
     param_log += f" ---->> Total Trainable Params: {total_params/1e6}M"
     
     logger.log_text(param_log)
     
-    
-
-
-
 
 def save_parser(args, path, filename='parser.json', format='json'):
     if isinstance(args, argparse.Namespace):
@@ -544,14 +523,13 @@ def set_random_seed(seed, deterministic=False, device='cuda'):
     """
     import random
     import numpy as np
-    
     def _set_seed(seed):
         random.seed(seed)
         np.random.seed(seed)
         if seed is None:
             seed = torch.initial_seed()
         torch.manual_seed(seed)
-        torch.cuda.manual_seed_all(seed)
+        torch.cuda.manual_seed(seed)
         if deterministic:
             torch.backends.cudnn.deterministic = True
             torch.backends.cudnn.benchmark = False
@@ -568,14 +546,25 @@ def set_random_seed(seed, deterministic=False, device='cuda'):
     random_num = torch.tensor(seed, dtype=torch.int32, device=device)
     # dist.broadcast(random_num, src=0)
     seed = random_num.item()
-        
     _set_seed(seed)
     
     return seed
     
 
+def get_mtl_performance(single, multi):
+    assert len(single) == len(multi)
+    T = len(single)  
+    
+    total = 0.
+    for i in range(T):
+        total += (multi[i] - single[i]) / single[i]
 
-        
+    delta_perf = total / T
+    
+    return delta_perf
+
+
+
     
     # a = 0
     # print("here")

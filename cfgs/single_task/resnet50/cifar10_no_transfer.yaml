@@ -1,0 +1,39 @@
+setup: 'single_task'
+
+backbone: 'resnet50'
+detector: null
+segmentor: null
+backbone_type: 'origin'
+use_minids: False
+
+state_dict: 
+  # stem: '/root/volume/pre_weights/resnet50_IM1K_only_stem.pth'
+  # backbone: '/root/volume/pre_weights/resnet50_IM1K_only_layer.pth'
+  stem: null
+  backbone: null
+
+task_cfg:
+  cifar10:  
+    task: 'clf'
+    num_classes: 10
+    stem:
+      kernel_size: 3
+      stride: 1
+      padding: 1
+    backbone:
+      dilation_type: fff
+      train_allbackbone: False
+      freeze_bn: False
+      backbone_type: intermediate
+      use_fpn: False
+    head:
+      in_channel: 2048
+
+relu_type: null
+lr_steps: [100, 150]
+
+task_bs:
+  - 64
+
+epochs: 200
+print_freq: 10

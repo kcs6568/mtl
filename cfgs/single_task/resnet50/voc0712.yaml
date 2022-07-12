@@ -1,0 +1,39 @@
+setup: 'single_task'
+backbone: 'resnet50'
+detector: null
+segmentor: 'fcn'
+
+state_dict: 
+  stem: '/root/volume/pre_weights/resnet50_IM1K_only_stem.pth'
+  backbone: '/root/volume/pre_weights/resnet50_IM1K_only_layer.pth'
+  # stem: null
+  # backbone: null
+
+task_cfg:
+  voc:
+    task: 'seg'
+    num_classes: 21
+    task_cfg:
+      train:
+        year: '0712'
+        task: 'trainval'
+      test:
+        year: '2007'
+        task: 'test'
+    stem:
+      kernel_size: 7
+      stride: 2
+      padding: 3
+    backbone:
+      dilation_type: ftt
+      train_allbackbone: True
+      freeze_bn: False
+      use_fpn: False
+      backbone_type: intermediate
+    head:
+      in_channels: 2048
+      use_aux: True
+
+epochs: 30
+lr_steps: [20, 25]
+print_freq: 10

@@ -1,5 +1,6 @@
 import os
 from collections import OrderedDict
+from random import shuffle
 
 import torch.utils.data
 import torchvision.datasets as datasets
@@ -60,14 +61,17 @@ def load_datasets(args, only_val=True):
         
         if test_ld:
             test_loaders[data] = test_ld
-            
-    dataset_size = {len(dl): data for data, dl in train_loaders.items()}
-    largest_size = max(list(dataset_size.keys()))
-    largest_dataset = dataset_size[largest_size]
+    
+    # print(train_loaders)
+    # exit()
+    dataset_size = {data: len(dl) for data, dl in train_loaders.items()}
+    largest_size = max(list(dataset_size.values()))
+    largest_dataset = sorted([d for d, l in dataset_size.items() if l == largest_size])[0]
+
     
     train_loaders.move_to_end(largest_dataset, last=False)
     val_loaders.move_to_end(largest_dataset, last=False)
-                        
+        
     return train_loaders, val_loaders, test_loaders
 
 
@@ -87,10 +91,10 @@ def load_cifar10(args, path):
         
     else:
         transform=transforms.Compose([
+            transforms.RandomCrop(32, padding=4),
             transforms.RandomHorizontalFlip(),
-            transforms.RandomCrop(32, 4),
             transforms.ToTensor(),
-            normalize
+            transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
         ])
     
     train_dataset = datasets.CIFAR10(
@@ -103,7 +107,7 @@ def load_cifar10(args, path):
         path,
         transform=transforms.Compose([
             transforms.ToTensor(),
-            normalize
+            transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
         ]),
         download=download,
         train=False
@@ -135,10 +139,10 @@ def load_cifar100(args, path):
         
     else:
         transform=transforms.Compose([
+            transforms.RandomCrop(32, padding=4),
             transforms.RandomHorizontalFlip(),
-            transforms.RandomCrop(32, 4),
             transforms.ToTensor(),
-            normalize
+            transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
         ])
     
     train_dataset = datasets.CIFAR100(
@@ -163,6 +167,7 @@ def load_cifar100(args, path):
     if args.distributed:
         train_sampler, test_sampler = return_sampler(train_dataset, test_dataset, args.world_size, args.gpu)
 
+    args.pin_memory = False
     train_loader, test_loader = get_dataloader(train_dataset, test_dataset, train_sampler, test_sampler, 
                                                 args, args.batch_size)
     
@@ -183,9 +188,12 @@ def load_stl10(args, path, input_size=96):
         download=download
     )
     
+    if not 'color_jitter' in args:
+        args.color_jitter = False
+    
     if args.get_mean_std:
         train_transform = transforms.Compose([
-            transforms.RandomCrop(input_size, 4),
+            transforms.RandomCrop(input_size, padding=4),
             transforms.RandomHorizontalFlip(),
             transforms.ToTensor(),
             transforms.Normalize(get_mean(train_dataset), get_std(train_dataset))
@@ -195,21 +203,33 @@ def load_stl10(args, path, input_size=96):
             transforms.ToTensor(),
             transforms.Normalize(get_mean(test_dataset), get_std(test_dataset))
         ])
-        
+    
     else:
         normalize = transforms.Normalize(
-            mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-        train_transform = transforms.Compose([
-            transforms.RandomCrop(input_size, 4),
-            transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
-            normalize
-        ])
+            mean = [0.4914, 0.4822, 0.4465], std = [0.2023, 0.1994, 0.2010])
+            # mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        
+        
+        
+        if args.color_jitter:
+            train_transform = transforms.Compose([
+                transforms.RandomCrop(input_size, 4),
+                transforms.ColorJitter(0.4, 0.4, 0.4, 0.4),
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                normalize
+            ])
+        else:
+            train_transform = transforms.Compose([
+                transforms.RandomCrop(input_size, 4),
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                normalize
+            ])
         test_transform = transforms.Compose([
             transforms.ToTensor(),
             normalize
         ])
-    
     
     train_dataset.transform = train_transform
     test_dataset.transform = test_transform
@@ -220,8 +240,9 @@ def load_stl10(args, path, input_size=96):
     if args.distributed:
         train_sampler, test_sampler = return_sampler(train_dataset, test_dataset, args.world_size, args.gpu)
     
-    if args.num_datasets != 1:
-        args.pin_memory = False
+    # if args.num_datasets != 1:
+    #     args.pin_memory = False
+    args.pin_memory = False
     
     train_loader, test_loader = get_dataloader(train_dataset, test_dataset, train_sampler, test_sampler, 
                                                 args, args.batch_size)
@@ -287,7 +308,7 @@ def load_coco(args, data_path, trs_type='det'):
         
     if args.distributed:
         train_sampler = torch.utils.data.distributed.DistributedSampler(train_ds)
-        val_sampler = torch.utils.data.distributed.DistributedSampler(val_ds)
+        val_sampler = torch.utils.data.distributed.DistributedSampler(val_ds, shuffle=False)
     else:
         train_sampler = torch.utils.data.RandomSampler(train_ds)
         val_sampler = torch.utils.data.SequentialSampler(val_ds)
@@ -298,6 +319,7 @@ def load_coco(args, data_path, trs_type='det'):
     else:
         train_batch_sampler = torch.utils.data.BatchSampler(train_sampler, args.batch_size, drop_last=True)
     
+    args.pin_memory = False
     train_loader = torch.utils.data.DataLoader(
         train_ds, batch_sampler=train_batch_sampler, num_workers=args.workers, collate_fn=coco_collate_fn,
     )
@@ -341,9 +363,11 @@ def load_voc(args, task_type, task_cfg):
 
     test_loader = None
     
+    # args.pin_memory = False
+    # if len(args.task_bs) == 1:
+    #     args.pin_memory = True
+    
     args.pin_memory = False
-    if len(args.task_bs) == 1:
-        args.pin_memory = True
     
     # args.pin_memory = True  
     train_loader, val_loader = get_dataloader(
@@ -355,6 +379,10 @@ def load_voc(args, task_type, task_cfg):
 def load_cityscape(args, path):
     from .cityscapes.cityscapes_dataset import Cityscapes
     from lib.transforms import seg_transforms, shared_transforms
+    '''
+    Reference of used transform below:
+        https://github.com/VainF/DeepLabV3Plus-Pytorch/blob/master/main.py
+    '''
     
     crop_size = args.task_cfg['cityscapes']['crop_size']
     train_transform = shared_transforms.Compose([
@@ -394,11 +422,12 @@ def load_cityscape(args, path):
 
     test_loader = None
     
-    args.pin_memory = False
-    if len(args.task_bs) == 1:
-        args.pin_memory = True
+    # args.pin_memory = False
+    # if len(args.task_bs) == 1:
+    #     args.pin_memory = True
     
-    # args.pin_memory = True  
+    args.pin_memory = False
+    
     train_loader, val_loader = get_dataloader(
         train_ds, val_ds, train_sampler, val_sampler, args, args.batch_size)
     

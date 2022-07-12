@@ -13,6 +13,9 @@ def set_args(args):
         for i, j in configs.items():
             setattr(args, i, j)
     
+    args.lr = float(args.lr)
+    args.gamma = float(args.gamma)
+    
     # if len(args.task_bs) == 3:
     #     task_bs = {k: args.task_bs[i]  for i, (k, v) in enumerate(args.task_cfg.items()) if v is not None}
     #     args.task_bs = task_bs
@@ -23,14 +26,18 @@ def set_args(args):
         
     # else:
     #     args.task_bs = {k: v['bs']  for i, (k, v) in enumerate(args.task_cfg.items()) if v is not None}
-        
-    task_bs = {data: args.task_bs[i]  for i, (data, v) in enumerate(args.task_cfg.items()) if v is not None}
+
+    
+    task_bs = {data: args.task_bs[i]  for i, data in enumerate(args.task_cfg.keys())}
     args.task_bs = task_bs
     args.task_per_dset = {data: v['task']  for i, (data, v) in enumerate(args.task_cfg.items())}
     
-    if args.lossbal:
-        task_ratio = {k: float(r/10) for k, r in zip(list(args.task_cfg.keys()), args.loss_ratio)}
-        args.loss_ratio = task_ratio
+    # if args.lossbal:
+    #     print(args.loss_ratio)
+    #     # task_ratio = {k: float(r/10) for k, r in zip(list(args.task_cfg.keys()), args.loss_ratio)}
+    #     # args.loss_ratio = task_ratio
+    #     args.loss_ratio = {k: float() for k, r in args.loss_ratio.items()}
+    #     print(args.loss_ratio)
     
     args.num_classes = {k: v['num_classes'] for k, v in args.task_cfg.items()}
     args.num_datasets = len(args.task_bs)
@@ -71,6 +78,9 @@ def set_args(args):
         num_task = "quadruple"
     elif args.num_datasets == 5:
         num_task = "quintuple"
+    
+    if args.setup == 'single_task':
+        args.method = 'baseline'
     
     if args.output_dir:
         args.output_dir = os.path.join(
@@ -180,3 +190,5 @@ def count_params(model, task='clf', input_size=224):
     flops = calc_flops(model, task, input_size)
     
     return params, flops
+
+

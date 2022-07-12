@@ -47,6 +47,7 @@ class TrainParser:
         parser.add_argument("--use-awl", action='store_true')
         parser.add_argument("--warmup", action='store_false')
         parser.add_argument("--warmup-ratio", type=float, default=0.6)
+        parser.add_argument("--warmup-epoch", type=int, default=1)
         parser.add_argument("--start_epoch", default=0, type=int, help="start epoch")
         parser.add_argument("--epochs", default=145, type=int, metavar="N", help="number of total epochs to run")
         parser.add_argument("--opt", type=str, default='sgd')
@@ -61,17 +62,16 @@ class TrainParser:
             "--wd",
             "--weight-decay",
             default=1e-4,
-            type=float,
+            type=str,
             metavar="W",
             help="weight decay (default: 1e-4)",
             dest="weight_decay",
         )
         parser.add_argument(
-            "--lr-scheduler", default="multisteplr", type=str, help="name of lr scheduler (default: multisteplr)"
+            "--lr-scheduler", default="multi", type=str, help="name of lr scheduler (default: multisteplr)"
         )
         parser.add_argument(
-            "--lr-step-size", default=8, type=int, help="decrease lr every step-size epochs (multisteplr scheduler only)"
-        )
+            "--step-size", default=5, type=int)
         parser.add_argument(
             "--lr-steps",
             default=[8, 11],
@@ -80,7 +80,7 @@ class TrainParser:
             help="decrease lr every step-size epochs (multisteplr scheduler only)",
         )
         parser.add_argument(
-            "--lr-gamma", default=0.1, type=float, help="decrease lr by a factor of lr-gamma (multisteplr scheduler only)"
+            "--gamma", default=0.1, type=str, help="decrease lr by a factor of lr-gamma (multisteplr scheduler only)"
         )
         parser.add_argument(
             "--sync-bn",
@@ -93,7 +93,7 @@ class TrainParser:
         parser.add_argument("--resume-file", default=None, type=str)
         parser.add_argument("--return-count", action='store_true',
                             help="return reloaded count for loss balancing on overloaded dataset")
-        
+        parser.add_argument("--grad-clip-value", default=None, type=int)
         
         # model settings
         parser.add_argument("--weights", default=None, type=str, help="the weights enum name to load")
@@ -102,9 +102,10 @@ class TrainParser:
             "--trainable-backbone-layers", default=None, type=int, help="number of trainable layers of backbone"
         )
         parser.add_argument("--model-type", default='general')
-        parser.add_argument("--allbackbone-train", action='store_true')
+        parser.add_argument("--train-allbackbone", action='store_true')
         parser.add_argument("--freeze-bn", action='store_true')
         parser.add_argument("--dilation-type", default='fft', type=str)
+        parser.add_argument("--use-neck", action='store_true')
         
         
         # classification settings
@@ -131,11 +132,13 @@ class TrainParser:
             action="store_true",
         )
         parser.add_argument(
-            "--test-only",
-            dest="test_only",
+            "--only-val",
             action="store_true",
         )
         
+        parser.add_argument("--make-cm", action="store_true")
+        
+        parser.add_argument("--find-epoch", default=None, type=int, help="the epoch for finding proper hyper parameters")
         
         # environment settings
         parser.add_argument("--exp-case", default="0", type=str, help="exp case")
@@ -149,16 +152,7 @@ class TrainParser:
         parser.add_argument("--dist-url", default="env://", type=str, help="url used to set up distributed training")
         parser.add_argument("--seed", default=0, type=int)
         # parser.add_argument("--distributed", action='store_false')
-        
 
-        # Prototype models only
-        parser.add_argument(
-            "--prototype",
-            dest="prototype",
-            help="Use prototype model builders instead those from main area",
-            action="store_true",
-        )
-        
 
         # Mixed precision training parameters
         parser.add_argument("--amp", action="store_true", help="Use torch.cuda.amp for mixed precision training")
@@ -168,9 +162,29 @@ class TrainParser:
         parser.add_argument("--bottleneck-test", action='store_true')
         parser.add_argument("--loss-alpha", type=float, default=None)
         parser.add_argument("--alpha-task", nargs='+', type=str, default=None)
+        parser.add_argument("--prototype", action='store_true')
         
         args = parser.parse_args()
         
         return args
     
+    
+class InferenceParser:
+    def __init__(self) -> None:
+        self.args = self._make_parser()
+        
+    def _make_parser(self):
+        parser = argparse.ArgumentParser()
+        
+        parser.add_argument("--yaml_cfg", default=None)
+        parser.add_argument("--gpu", default=0, type=int)
+        parser.add_argument("--save_name")
+        # parser.add_argument("--cfg", default=None)
+        # parser.add_argument("--task", default=None)
+        # parser.add_argument("--image-path", default=None)
+        # parser.add_argument("--output-dir", default='/root/volume/exp')
+        
+        args = parser.parse_args()
+        
+        return args
     

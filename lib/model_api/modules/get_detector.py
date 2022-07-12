@@ -7,6 +7,7 @@
 
 import warnings
 from collections import OrderedDict
+from typing import Tuple, List, Dict, Optional, Union
 
 import torch
 import torch.nn as nn
@@ -22,17 +23,34 @@ from torchvision.models.detection.transform import GeneralizedRCNNTransform
 from torchvision.models.detection import RetinaNet
 
 
-def build_detector(detector_name, 
-                   out_channels,
-                   num_classes,
-                   pretrained=False,
-                   progress=True,
-                   **kwargs):
+def build_detector(
+    backbone_type,
+    detector_name, 
+    out_channels,
+    num_classes,
+    pretrained=False,
+    progress=True,
+    **kwargs):
     detector_name = detector_name.lower()
     
+    if 'resnet' in backbone_type or 'resnext' in backbone_type:
+        anchor_sizes = ((32,), (64,), (128,), (256,), (512,))
+        aspect_ratios = ((0.5, 1.0, 2.0),) * len(anchor_sizes)
+    elif 'mobilenet' in backbone_type:
+        anchor_sizes = ((32, 64, 128, 256, 512, ), ) * kwargs['num_anchors']
+        aspect_ratios = ((0.5, 1.0, 2.0),) * len(anchor_sizes)
+        
+
+        
+    rpn_anchor_generator = AnchorGenerator(
+        anchor_sizes, aspect_ratios
+    )
         
     if 'faster' in detector_name:
-        model = FasterRCNN(out_channels, num_classes=num_classes, **kwargs)
+        model = FasterRCNN(out_channels, 
+                           num_classes=num_classes, 
+                           rpn_anchor_generator=rpn_anchor_generator,
+                           **kwargs)
     
     elif 'retina' in detector_name:
         raise TypeError("RetinaNet is needed implementation.")
@@ -52,22 +70,31 @@ def build_detector(detector_name,
     
 class DetStem(nn.Module):
     def __init__(self,
-                 init_channels=64,
+                 out_channels=64,
                  kernel_size=7,
                  stride=2,
                  padding=3,
                  stem_weight=None,
                  freeze_bn=False,
                  min_size=800, max_size=1333, 
-                 image_mean=None, image_std=None) -> None:
+                 image_mean=None, image_std=None,
+                 use_maxpool=True,
+                 relu=None) -> None:
         super().__init__()
-        self.conv = nn.Conv2d(3, init_channels, kernel_size=kernel_size, stride=stride, padding=padding,
+        self.conv = nn.Conv2d(3, out_channels, kernel_size=kernel_size, stride=stride, padding=padding,
                                bias=False)
-        # self.bn = nn.BatchNorm2d(init_channels)
+        # self.bn = nn.BatchNorm2d(out_channels)
         bn = misc_nn_ops.FrozenBatchNorm2d if freeze_bn else nn.BatchNorm2d
-        self.bn = bn(init_channels)
-        self.relu = nn.ReLU(inplace=True)
-        self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+        self.bn = bn(out_channels)
+        if relu == 'hardswish':
+            self.activation = nn.Hardswish(inplace=True)
+        else:
+            self.activation = nn.ReLU(inplace=True)
+            
+        if use_maxpool:
+            self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+        else:
+            self.maxpool = None
         
         if stem_weight:
             ckpt = torch.load(stem_weight)
@@ -86,18 +113,16 @@ class DetStem(nn.Module):
         - images (list[Tensor]): images to be processed
         - targets (list[Dict[Tensor]]): ground-truth boxes present in the image (optional)
         '''
-        images, _ = self.transform(images, targets)
+        images, _ = self.transform(images)
         
         x = self.conv(images.tensors)
         x = self.bn(x)
-        x = self.relu(x)
-        x = self.maxpool(x)
+        x = self.activation(x)
+        
+        if self.maxpool:
+            x = self.maxpool(x)
+        
         return x
-        # if self.training:
-        #     # return x, targets
-        #     return x
-        # else:
-        #     return x
         
 
 class FasterRCNN(nn.Module):
@@ -135,10 +160,11 @@ class FasterRCNN(nn.Module):
             rpn_anchor_generator = AnchorGenerator(
                 anchor_sizes, aspect_ratios
             )
-            
+        
+        relu_type = kwargs['relu_type'] if 'relu_type' in kwargs else None
         if rpn_head is None:
             rpn_head = RPNHead(
-                out_channels, rpn_anchor_generator.num_anchors_per_location()[0]\
+                out_channels, rpn_anchor_generator.num_anchors_per_location()[0], relu=relu_type
             )
 
         rpn_pre_nms_top_n = dict(training=rpn_pre_nms_top_n_train, testing=rpn_pre_nms_top_n_test)
@@ -162,7 +188,7 @@ class FasterRCNN(nn.Module):
             representation_size = 1024
             box_head = TwoMLPHead( # same as fast-rcnn
                 out_channels * resolution ** 2,
-                representation_size)
+                representation_size, relu=relu_type)
             
         if box_predictor is None:
             representation_size = 1024
@@ -177,13 +203,16 @@ class FasterRCNN(nn.Module):
             box_batch_size_per_image, box_positive_fraction,
             bbox_reg_weights,
             box_score_thresh, box_nms_thresh, box_detections_per_img)
-
+        
 
     def get_original_size(self, images):
-        original_image_sizes = []
+        original_image_sizes: List[Tuple[int, int]] = []
         for img in images:
             val = img.shape[-2:]
-            assert len(val) == 2
+            torch._assert(
+                len(val) == 2,
+                f"expecting the last two dimensions of the Tensor to be H and W instead got {img.shape[-2:]}",
+            )
             original_image_sizes.append((val[0], val[1]))
             
         return original_image_sizes
@@ -196,44 +225,67 @@ class FasterRCNN(nn.Module):
 
         return detections
             
-            
-    def forward(self, origins, features, origin_targets=None, trs_targets=None, trs_fn=None):
+    
+    # def forward(self, origins, features, origin_targets=None, trs_targets=None, trs_fn=None):        
+    def forward(self, origins, features, trs_fn, origin_targets=None):
         '''
             - origins: original images (not contain target data)
             - features (Tuple(Tensor)): feature data extracted backbone
             - trs_targets: target data transformed in the detection stem layer
         '''
-        if self.training:
-            assert origin_targets is not None
-            for target in origin_targets:
-                boxes = target["boxes"]
-                if isinstance(boxes, torch.Tensor):
-                    if len(boxes.shape) != 2 or boxes.shape[-1] != 4:
-                        raise ValueError("Expected target boxes to be a tensor"
-                                         "of shape [N, 4], got {:}.".format(
-                                             boxes.shape))
-                else:
-                    raise ValueError("Expected target boxes to be of type "
-                                     "Tensor, got {:}.".format(type(boxes)))
         
-        if trs_fn:
-            if origin_targets and (not trs_targets):
-                trs_images, trs_targets = trs_fn(origins, origin_targets)
-            elif (not (origin_targets) and trs_targets) \
-                or (not (origin_targets) and (not trs_targets)):
-                trs_images, _ = trs_fn(origins)
+        if self.training:
+            if origin_targets is None:
+                torch._assert(False, "targets should not be none when in training mode")
+            else:
+                for target in origin_targets:
+                    boxes = target["boxes"]
+                    if isinstance(boxes, torch.Tensor):
+                        torch._assert(
+                            len(boxes.shape) == 2 and boxes.shape[-1] == 4,
+                            f"Expected target boxes to be a tensor of shape [N, 4], got {boxes.shape}.",
+                        )
+                    else:
+                        torch._assert(False, f"Expected target boxes to be of type Tensor, got {type(boxes)}.")
+
+        original_image_sizes = self.get_original_size(origins)
+        trs_images, trs_targets = trs_fn(origins, origin_targets)
+        
+        if trs_targets is not None:
+            for target_idx, target in enumerate(trs_targets):
+                boxes = target["boxes"]
+                degenerate_boxes = boxes[:, 2:] <= boxes[:, :2]
+                if degenerate_boxes.any():
+                    # print the first degenerate box
+                    bb_idx = torch.where(degenerate_boxes.any(dim=1))[0][0]
+                    degen_bb: List[float] = boxes[bb_idx].tolist()
+                    torch._assert(
+                        False,
+                        "All bounding boxes should have positive height and width."
+                        f" Found invalid box {degen_bb} for target at index {target_idx}.",
+                    )
+
+        
+        # if trs_fn:
+        #     if origin_targets and (not trs_targets):
+        #         trs_images, trs_targets = trs_fn(origins, origin_targets)
+        #     elif (not (origin_targets) and trs_targets) \
+        #         or (not (origin_targets) and (not trs_targets)):
+        #         trs_images, trs_targets = trs_fn(origins, trs_targets)
         
         if isinstance(features, torch.Tensor):
             features = OrderedDict([('0', features)])
-        
-        original_image_sizes = self.get_original_size(origins)
-        
-        # print(features)
         
         proposals, proposal_losses = self.rpn(trs_images, features, trs_targets)
         detections, detector_losses = self.roi_heads(features, proposals, trs_images.image_sizes, trs_targets)
         detections = trs_fn.postprocess(detections, trs_images.image_sizes, original_image_sizes)
 
+        # print(proposals)
+        # print(detections)
+        # print(self.training)
+        # exit()
+        
+        
         losses = {}
         losses.update(detector_losses)
         losses.update(proposal_losses)
@@ -413,15 +465,19 @@ class TwoMLPHead(nn.Module):
         representation_size (int): size of the intermediate representation
     """
 
-    def __init__(self, in_channels, representation_size):
+    def __init__(self, in_channels, representation_size, relu=None):
         super(TwoMLPHead, self).__init__()
 
         self.fc6 = nn.Linear(in_channels, representation_size)
         self.fc7 = nn.Linear(representation_size, representation_size)
+        # self.relu = nn.ReLU(inplace=True) if relu is None else relu
+        # self.relu = F.relu
 
     def forward(self, x):
         x = x.flatten(start_dim=1)
 
+        # x = self.relu(self.fc6(x))
+        # x = self.relu(self.fc7(x))
         x = F.relu(self.fc6(x))
         x = F.relu(self.fc7(x))
 
@@ -463,7 +519,7 @@ class RPNHead(nn.Module):
         num_anchors (int): number of anchors to be predicted
     """
 
-    def __init__(self, in_channels, num_anchors):
+    def __init__(self, in_channels, num_anchors, relu=None):
         super(RPNHead, self).__init__()
         self.conv = nn.Conv2d(
             in_channels, in_channels, kernel_size=3, stride=1, padding=1
@@ -472,16 +528,20 @@ class RPNHead(nn.Module):
         self.bbox_pred = nn.Conv2d(
             in_channels, num_anchors * 4, kernel_size=1, stride=1
         )
-
+        
         for layer in self.children():
             torch.nn.init.normal_(layer.weight, std=0.01)
             torch.nn.init.constant_(layer.bias, 0)
+            
+        # self.relu = nn.ReLU(inplace=True) if relu is None else relu
+        # self.relu = F.relu
 
     def forward(self, x):
         # type: (List[Tensor]) -> Tuple[List[Tensor], List[Tensor()]]
         logits = []
         bbox_reg = []
         for feature in x:
+            # t = self.relu(self.conv(feature))
             t = F.relu(self.conv(feature))
             logits.append(self.cls_logits(t))
             bbox_reg.append(self.bbox_pred(t))

@@ -1,0 +1,151 @@
+setup: 'multi_task'
+method: 'cross_stitch'
+
+backbone: 'mobilenet_v3_large'
+detector: 'fasterrcnn'
+segmentor: 'fcn'
+
+use_minids: True
+
+state_dict: 
+  stem: /root/volume/pre_weights/mobilenetv3_IM1K_only_stem.pth
+  backbone: /root/volume/pre_weights/mobilenetv3_IM1K_only_layer.pth
+  # stem: null
+  # backbone: null
+
+task_cfg:
+  cifar10:
+    task: 'clf'
+    num_classes: 10
+    stem:
+      out_channels: 16
+      kernel_size: 3
+      stride: 1
+      padding: 1
+      relu: hardswish
+    backbone:
+      train_allbackbone: True
+      freeze_backbone: False
+      freeze_bn: False
+      backbone_type: origin
+      use_fpn: False
+      no_st_early: True
+      return_layer:
+        - '15'
+    head:
+      in_channel: 960 
+      middle_channle: 1280
+
+  stl10:
+    stl10:
+    task: 'clf'
+    num_classes: 10
+    input_size: 96
+    stem:
+      out_channels: 16
+      kernel_size: 3
+      stride: 1
+      padding: 1
+      relu: hardswish
+    backbone:
+      train_allbackbone: True
+      freeze_backbone: False
+      freeze_bn: False
+      backbone_type: origin
+      use_fpn: False
+      no_st_early: True
+      return_layer:
+        - '15'
+
+    head:
+      in_channel: 960
+      middle_channle: 1280
+
+  minicoco:
+    task: 'det'
+    num_classes: 91
+    stem:
+      out_channels: 16
+      kernel_size: 3
+      stride: 2
+      padding: 1
+      use_maxpool: False
+      relu: hardswish
+    backbone:
+      train_allbackbone: False
+      freeze_backbone: False
+      backbone_type: intermediate
+      freeze_bn: True
+      use_fpn: True
+      no_st_early: False
+      return_layer:
+        - '12'
+        - '15'
+    head: null
+  
+  voc:
+    voc:
+    task: 'seg'
+    num_classes: 21
+    task_cfg:
+      train:
+        year: '0712'
+        task: 'trainval'
+      test:
+        year: '2007'
+        task: 'test'
+    stem:
+      out_channels: 16
+      kernel_size: 3
+      stride: 2
+      padding: 1
+      use_maxpool: False
+      relu: hardswish
+    backbone:
+      train_allbackbone: True
+      freeze_backbone: False
+      freeze_bn: False
+      backbone_type: origin
+      use_fpn: False
+      no_st_early: False
+      dilated: True
+      return_layer:
+        - '3'
+        - '15'
+    head:
+      in_channels: 960
+      use_aux: True
+      aux_channel: 40
+
+dilation: True
+freeze_bn: True
+train_allbackbone: True
+freeze_backbone: False
+no_st_early: True
+
+task_bs: 
+  - 2
+  - 2
+  - 2
+  - 2
+
+cross_stitch_kwargs: 
+  alpha: 0.9
+  beta: 0.1
+  stages: ['3', '12', '15']
+  channels:
+    '3': 40
+    '12': 160
+    '15': 960
+
+
+loss_ratio:
+  cifar10: 0.15
+  stl10: 0.15
+  minicoco: 0.5
+  voc: 0.2
+
+epochs: 12
+aspect-ratio-group-factor: 3
+print_freq: 50
+

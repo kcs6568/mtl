@@ -1,0 +1,48 @@
+setup: single_task
+
+backbone: 'mobilenet_v3_large'
+detector: null
+segmentor: 'fcn'
+
+use_minids: False
+state_dict: 
+  stem: '/root/volume/pre_weights/mobilenetv3_IM1K_only_stem.pth'
+  backbone: '/root/volume/pre_weights/mobilenetv3_IM1K_only_layer.pth'
+
+task_cfg:
+  voc:
+    task: 'seg'
+    num_classes: 21
+    task_cfg:
+      train:
+        year: '0712'
+        task: 'trainval'
+      test:
+        year: '2007'
+        task: 'test'
+    stem:
+      out_channels: 16
+      kernel_size: 3
+      stride: 2
+      padding: 1
+      use_maxpool: False
+      relu: hardswish
+    backbone:
+      train_allbackbone: True
+      freeze_backbone: False
+      freeze_bn: False
+      backbone_type: intermediate
+      use_fpn: False
+      no_st_early: False
+      dilation: True
+    head:
+      in_channels: 960
+      use_aux: True
+      aux_channel: 40
+
+
+epochs: 30
+lr_steps: [20, 25]
+print_freq: 10
+
+

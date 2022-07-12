@@ -38,47 +38,48 @@ class MultiTaskNetwork(nn.Module):
         self.backbone = build_backbone(
             backbone, detector, segmentor, kwargs)
         
-        # self.backbone = build_backbone(
-        #     backbone, detector, segmentor, weight_path=kwargs['state_dict']['backbone'],
-        #     train_allbackbone=kwargs['train_allbackbone'],
-        #     use_fpn=kwargs['use_fpn'],
-        #     freeze_all_backbone_layers=kwargs['freeze_backbone'],
-        #     freeze_bn=kwargs['freeze_bn'],
-        #     dilation_type=kwargs['dilation_type'],
-        #     backbone_type=kwargs['backbone_type'])
-        
-        
         self.stem_dict = nn.ModuleDict()
         self.head_dict = nn.ModuleDict()
         
         stem_weight = kwargs['state_dict']['stem']
         for data, cfg in task_cfg.items():
-            if cfg['task'] == 'clf':
+            task = cfg['task']
+            num_classes = cfg['num_classes']
+            if task == 'clf':
                 stem = ClfStem(**cfg['stem'])
-                head = build_classifier(self.backbone.last_out_channel, cfg['num_classes'])
+                head = build_classifier(
+                    backbone, num_classes, cfg['head'])
                 stem.apply(init_weights)
                 
+            elif task == 'det':
+                stem = DetStem(**cfg['stem'])
                 
-            elif cfg['task'] == 'det':
-                stem = DetStem()
-                head = build_detector(detector, self.backbone.fpn_out_channels, 
-                                      cfg['num_classes'])
+                head_kwargs = {'num_anchors': len(self.backbone.body.return_layers)+1}
+                head = build_detector(
+                    backbone, detector, 
+                    self.backbone.fpn_out_channels, num_classes, **head_kwargs)
                 if stem_weight is not None:
                     ckpt = torch.load(stem_weight)
-                    stem.load_state_dict(ckpt)
+                    stem.load_state_dict(ckpt, strict=False)
+                    print("!!!Load weights for detection stem layer!!!")
             
-            elif cfg['task'] == 'seg':
+            elif task == 'seg':
                 stem = SegStem(**cfg['stem'])
-                head = build_segmentor(segmentor, cfg['head'])
+                head = build_segmentor(segmentor, num_classes=num_classes, cfg_dict=cfg['head'])
                 if stem_weight is not None:
                     ckpt = torch.load(stem_weight)
-                    stem.load_state_dict(ckpt)
+                    stem.load_state_dict(ckpt, strict=False)
+                    print("!!!Load weights for segmentation stem layer!!!")
             
             head.apply(init_weights)
             self.stem_dict.update({data: stem})
             self.head_dict.update({data: head})
         
+        if 'use_awl' in kwargs:
+            if kwargs['use_awl']:
+                self.awl = AutomaticWeightedLoss(len(task_cfg))    
         
+            
     def freeze_seperate_layers(self, return_task=False):
         assert self.seperate_task is not None
         
@@ -139,84 +140,163 @@ class MultiTaskNetwork(nn.Module):
                                        trs_fn=self.det_stem.transform)
         
             
-    def _extract_stem_feats(self, data_dict):
+    # def _extract_stem_feats(self, data_dict):
+    #     stem_feats = OrderedDict()
+        
+    #     for task, (images, targets) in data_dict.items():
+    #         if task == 'clf':
+    #             feats = self.clf_stem(images)
+                
+    #         elif task == 'det':
+    #             feats, targets = self.det_stem(images, targets=targets)
+                
+    #         elif task == 'seg':
+    #             feats = self.seg_stem(images)
+                
+    #         else:
+    #             raise KeyError("Not supported task was entered.")
+                
+    #         stem_feats.update({task: (feats, targets)})
+        
+    #     return stem_feats
+    
+    
+    # def _extract_backbone_feats(self, stem_feats):
+    #     backbone_feats = OrderedDict()
+        
+    #     for task, (feats, targets) in stem_feats.items():
+    #         if task == 'clf':
+    #             features = self.backbone(feats)
+            
+    #         elif task == 'det':
+    #             features = self.backbone(feats)
+            
+    #         elif task == 'seg':
+    #             features = self.backbone(feats)
+            
+    #         backbone_feats.update({task: (features, targets)})
+        
+    #     return backbone_feats
+    
+    
+    def _extract_stem_feats(self, data_dict, tasks):
         stem_feats = OrderedDict()
         
-        for task, (images, targets) in data_dict.items():
-            if task == 'clf':
-                feats = self.clf_stem(images)
-                
-            elif task == 'det':
-                feats, targets = self.det_stem(images, targets=targets)
-                
-            elif task == 'seg':
-                feats = self.seg_stem(images)
-                
-            else:
-                raise KeyError("Not supported task was entered.")
-                
-            stem_feats.update({task: (feats, targets)})
-        
-        return stem_feats
-    
-    
-    def _extract_backbone_feats(self, stem_feats):
-        backbone_feats = OrderedDict()
-        
-        for task, (feats, targets) in stem_feats.items():
-            if task == 'clf':
-                features = self.backbone(feats)
-            
-            elif task == 'det':
-                features = self.backbone(feats)
-            
-            elif task == 'seg':
-                features = self.backbone(feats)
-            
-            backbone_feats.update({task: (features, targets)})
-        
-        return backbone_feats
-
-    def _foward_train(self, data_dict, tasks):
-        total_losses = OrderedDict()
-        
-        for dset, (images, targets) in data_dict.items():
-            stem, head = self.stem_dict[dset], self.head_dict[dset]
+        for dset, (images, _) in data_dict.items():
             task = tasks[dset]
             
             if task == 'clf':
-                stem_feats = stem(images)
-                back_feats = self.backbone.body(stem_feats)
-                losses = head(back_feats, targets)
+                feats = self.stem_dict[dset](images)
                 
             elif task == 'det':
-                stem_feats = stem(images, targets=targets)
-                back_feats = self.backbone(stem_feats)
-                losses = head(data_dict[dset][0], back_feats, 
-                                       origin_targets=targets, 
-                                       trs_fn=self.stem_dict[dset].transform)
+                feats = self.stem_dict[dset](images)
                 
             elif task == 'seg':
-                stem_feats = stem(images)
-                back_feats = self.backbone.body(stem_feats)
-                losses = head(back_feats, targets, input_shape=targets.shape[-2:])
+                feats = self.stem_dict[dset](images)
+                
+            else:
+                raise KeyError("Not supported task was entered.")
+            
+            stem_feats.update({dset: feats})
+        return stem_feats
+    
+    
+    def _extract_backbone_feats(self, stem_feats, tasks):
+        backbone_feats = OrderedDict()
+        
+        for dset, feats in stem_feats.items():
+            task = tasks[dset]
+            if task == 'clf':
+                features = self.backbone.body(feats)
+            
+            elif task == 'det':
+                features = self.backbone(feats)
+            
+            elif task == 'seg':
+                features = self.backbone.body(feats)
+            
+            backbone_feats.update({dset: features})
+            
+        return backbone_feats
+    
+    
+    def _foward_train(self, data_dict, tasks):
+        total_losses = OrderedDict()
+        
+        stem_feats = self._extract_stem_feats(data_dict, tasks)
+        backbone_feats = self._extract_backbone_feats(stem_feats, tasks)
+        
+        for dset, back_feats in backbone_feats.items():
+            # print(dset)
+            # for k, v in back_feats.items():
+            #     print(k, v.size())
+            # print()
+            # continue
+            
+            
+            task = tasks[dset]
+            targets = data_dict[dset][1]
+            
+            if task == 'clf':
+                losses = self.head_dict[dset](back_feats, targets)
+                
+            elif task == 'det':
+                losses = self.head_dict[dset](data_dict[dset][0], back_feats,
+                                        self.stem_dict[dset].transform, 
+                                       origin_targets=targets)
+                
+            elif task == 'seg':
+                losses = self.head_dict[dset](
+                    back_feats, targets, input_shape=targets.shape[-2:])
                 
             losses = {f"{dset}_{k}": l for k, l in losses.items()}
             total_losses.update(losses)
-            
+        
+        if hasattr(self, 'awl'):
+            total_losses = self.awl(total_losses)
+        
         return total_losses
+    
+
+    # def _foward_train(self, data_dict, tasks):
+    #     total_losses = OrderedDict()
+        
+    #     for dset, (images, targets) in data_dict.items():
+    #         task = tasks[dset]
+    #         dset_task = f"{dset}_{task}"
+    #         stem, head = self.stem_dict[dset], self.head_dict[dset]
+            
+    #         if task == 'clf':
+    #             stem_feats = stem(images)
+    #             back_feats = self.backbone.body(stem_feats)
+    #             losses = head(back_feats, targets)
+                
+    #         elif task == 'det':
+    #             stem_feats = stem(images)
+    #             back_feats = self.backbone(stem_feats)
+    #             losses = head(images, back_feats, stem.transform, origin_targets=targets)
+                
+    #         elif task == 'seg':
+    #             stem_feats = stem(images)
+    #             back_feats = self.backbone.body(stem_feats)
+    #             losses = head(back_feats, targets, input_shape=targets.shape[-2:])
+                
+    #         losses = {f"{dset}_{k}": l for k, l in losses.items()}
+    #         total_losses.update(losses)
+            
+    #     return total_losses
     
     
     def _forward_val(self, images, kwargs):
-        dtype = kwargs['dtype']
-        task = kwargs['task']
+        dset = list(kwargs.keys())[0]
+        task = list(kwargs.values())[0]
         
-        stem, head = self.stem_dict[dtype], self.head_dict[dtype]
+        stem, head = self.stem_dict[dset], self.head_dict[dset]
         stem_feats = stem(images)
         
         if task == 'det':
             back_feats = self.backbone(stem_feats)
-            predictions = head(images, back_feats, trs_fn=stem.transform)
+            predictions = head(images, back_feats, stem.transform)
             return predictions
         
         else:

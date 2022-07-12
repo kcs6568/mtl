@@ -6,17 +6,28 @@ from torch.nn import functional as F
 
 class SegStem(nn.Module):
     def __init__(self,
-                 init_channels=64,
+                 out_channels=64,
                  kernel_size=7,
                  stride=2,
                  padding=3,
-                 stem_weight=None) -> None:
+                 stem_weight=None,
+                 use_maxpool=True,
+                 relu=None
+                ) -> None:
         super().__init__()
-        self.conv = nn.Conv2d(3, init_channels, kernel_size=kernel_size, stride=stride, padding=padding,
+        self.conv = nn.Conv2d(3, out_channels, kernel_size=kernel_size, stride=stride, padding=padding,
                                bias=False)
-        self.bn = nn.BatchNorm2d(init_channels)
-        self.relu = nn.ReLU(inplace=True)
-        self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+        self.bn = nn.BatchNorm2d(out_channels)
+        
+        if relu == 'hardswish':
+            self.activation = nn.Hardswish(inplace=True)
+        else:
+            self.activation = nn.ReLU(inplace=True)
+            
+        if use_maxpool:
+            self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+        else:
+            self.maxpool = None
         
         if stem_weight:
             ckpt = torch.load(stem_weight)
@@ -29,28 +40,42 @@ class SegStem(nn.Module):
             
         x = self.conv(x)
         x = self.bn(x)
-        x = self.relu(x)
-        x = self.maxpool(x)
+        x = self.activation(x)
+        
+        if self.maxpool:
+            x = self.maxpool(x)
         
         return x
 
 
 
 class FCNHead(nn.Module):
-    def __init__(self, in_channels=2048, num_classes=21, use_aux=True) -> None:
+    def __init__(self, in_channels=2048, inter_channels=None, 
+                 num_classes=21, use_aux=True, aux_channel=None, num_skip_aux=1) -> None:
         super(FCNHead, self).__init__()
-        inter_channels = in_channels // 4
+        inter_channels = in_channels // 4 if inter_channels is None else inter_channels
         self.fcn_head = self._make_fcn_head(in_channels, inter_channels, num_classes)
         if use_aux:
-            aux_inchannels = in_channels // 2
+            '''
+            get aux feature at the specific location (if this value is 1, the popitem() operation will be operated once)
+            '''
+            
+            self.num_skip_aux = num_skip_aux 
+            aux_inchannels = in_channels // 2 if aux_channel is None else aux_channel
             self.aux_head = self._make_fcn_head(aux_inchannels, aux_inchannels//4, num_classes)
-        
-
+            
+        # if loss_fn == 'ce':
+        #     self.loss_fn = self.ce_loss
+        # elif loss_fn == 'dice':
+        #     from ...apis.loss_lib import DiceLoss
+        #     self.criterion = DiceLoss()
+            
     def _make_fcn_head(self, in_channels, inter_channels, num_classes):
         layers = [
             nn.Conv2d(in_channels, inter_channels, 3, padding=1, bias=False),
             nn.BatchNorm2d(inter_channels),
-            nn.ReLU(),
+            # nn.ReLU(inplace=True) if relu is None else relu,
+            nn.ReLU(inplace=True),
             nn.Dropout(0.1),
             nn.Conv2d(inter_channels, num_classes, 1)
         ]
@@ -60,6 +85,7 @@ class FCNHead(nn.Module):
 
     def criterion(self, inputs, target):
         losses = {}
+        
         for name, x in inputs.items():
             losses[name] = nn.functional.cross_entropy(x, target, ignore_index=255)
         
@@ -74,22 +100,20 @@ class FCNHead(nn.Module):
         
         results = OrderedDict()
         _, x = feats.popitem()
-        # print(x.size())
         x = self.fcn_head(x)
-        # print(x.size())
+        
         x = F.interpolate(x, size=input_shape, mode='bilinear', align_corners=False)
-        # print(x.size())
         results["seg_out_loss"] = x
         
         if self.aux_head is not None:
-            _, x = feats.popitem()
-            # print(x.size())
+            for _ in range(self.num_skip_aux):
+                _, x = feats.popitem()
+                
             x = self.aux_head(x)
-            # print(x.size())
             x = F.interpolate(x, size=input_shape, mode='bilinear', align_corners=False)
-            # print(x.size())
             results["seg_aux_loss"] = x
         # exit()
+        
         if self.training:
             return self.criterion(results, target)
 
@@ -99,6 +123,7 @@ class FCNHead(nn.Module):
 
 def build_segmentor(
     segmentor_name,
+    num_classes=21,
     cfg_dict=None,
     detector=None,
     pretrained=False,
@@ -133,7 +158,7 @@ def build_segmentor(
 
     else:
         if 'fcn' in segmentor_name:
-            head = FCNHead(**cfg_dict)
+            head = FCNHead(num_classes=num_classes, **cfg_dict)
         
         elif 'deeplab' in segmentor_name:
             head = None    

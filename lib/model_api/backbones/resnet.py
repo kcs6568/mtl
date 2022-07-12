@@ -1,18 +1,89 @@
-import torch
-from torch import Tensor
-import torch.nn as nn
-
 from typing import Type, Any, Callable, Union, List, Optional
+
+import torch
+import torch.nn as nn
+import torchvision
+from torch import Tensor
+
 
 __all__ = ['ResNet', 'resnet18', 'resnet34', 'resnet50', 'resnet101',
            'resnet152', 'resnext50_32x4d', 'resnext101_32x8d',
            'wide_resnet50_2', 'wide_resnet101_2']
 
 
+class DeformableConv2d(nn.Module):
+    def __init__(self,
+                 in_channels,
+                 out_channels,
+                 kernel_size=3,
+                 stride=1,
+                 padding=1,
+                 bias=False,
+                 dilation=1,
+                 groups=1):
 
-def conv3x3(in_planes: int, out_planes: int, stride: int = 1, groups: int = 1, dilation: int = 1) -> nn.Conv2d:
+        super(DeformableConv2d, self).__init__()
+        
+        assert type(kernel_size) == tuple or type(kernel_size) == int
+
+        kernel_size = kernel_size if type(kernel_size) == tuple else (kernel_size, kernel_size)
+        self.stride = stride if type(stride) == tuple else (stride, stride)
+        self.padding = padding
+        
+        self.offset_conv = nn.Conv2d(in_channels, 
+                                     2 * kernel_size[0] * kernel_size[1],
+                                     kernel_size=kernel_size, 
+                                     stride=stride,
+                                     padding=self.padding, 
+                                     bias=True)
+
+        nn.init.constant_(self.offset_conv.weight, 0.)
+        nn.init.constant_(self.offset_conv.bias, 0.)
+        
+        self.modulator_conv = nn.Conv2d(in_channels, 
+                                     1 * kernel_size[0] * kernel_size[1],
+                                     kernel_size=kernel_size, 
+                                     stride=stride,
+                                     padding=self.padding, 
+                                     bias=True)
+
+        nn.init.constant_(self.modulator_conv.weight, 0.)
+        nn.init.constant_(self.modulator_conv.bias, 0.)
+        
+        self.regular_conv = nn.Conv2d(in_channels=in_channels,
+                                      out_channels=out_channels,
+                                      kernel_size=kernel_size,
+                                      stride=stride,
+                                      padding=self.padding,
+                                      bias=bias)
+
+    def forward(self, x):
+        #h, w = x.shape[2:]
+        #max_offset = max(h, w)/4.
+
+        offset = self.offset_conv(x)#.clamp(-max_offset, max_offset)
+        modulator = 2. * torch.sigmoid(self.modulator_conv(x))
+        
+        x = torchvision.ops.deform_conv2d(input=x, 
+                                          offset=offset, 
+                                          weight=self.regular_conv.weight, 
+                                          bias=self.regular_conv.bias, 
+                                          padding=self.padding,
+                                          mask=modulator,
+                                          stride=self.stride,
+                                          )
+        return x
+
+
+
+def conv3x3(in_planes: int, out_planes: int, stride: int = 1, groups: int = 1, dilation: int = 1, deform=False) -> nn.Conv2d:
     """3x3 convolution with padding"""
-    return nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride,
+    
+    if deform:
+        return DeformableConv2d(in_planes, out_planes, kernel_size=3, stride=stride,
+                     padding=dilation, groups=groups, bias=False, dilation=dilation)
+    else:
+        return nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride,
                      padding=dilation, groups=groups, bias=False, dilation=dilation)
 
 
@@ -44,6 +115,7 @@ class BasicBlock(nn.Module):
             raise NotImplementedError("Dilation > 1 not supported in BasicBlock")
         # Both self.conv1 and self.downsample layers downsample the input when stride != 1
         self.conv1 = conv3x3(inplanes, planes, stride)
+        
         self.bn1 = norm_layer(planes)
         self.relu = nn.ReLU(inplace=True)
         self.conv2 = conv3x3(planes, planes)
@@ -88,9 +160,77 @@ class Bottleneck(nn.Module):
         groups: int = 1,
         base_width: int = 64,
         dilation: int = 1,
-        norm_layer: Optional[Callable[..., nn.Module]] = None
+        norm_layer: Optional[Callable[..., nn.Module]] = None,
+        relu=None
     ) -> None:
         super(Bottleneck, self).__init__()
+        if norm_layer is None:
+            norm_layer = nn.BatchNorm2d
+        width = int(planes * (base_width / 64.)) * groups
+        # Both self.conv2 and self.downsample layers downsample the input when stride != 1
+        self.conv1 = conv1x1(inplanes, width)
+        self.bn1 = norm_layer(width)
+        self.conv2 = conv3x3(width, width, stride, groups, dilation,)
+        self.bn2 = norm_layer(width)
+        self.conv3 = conv1x1(width, planes * self.expansion)
+        self.bn3 = norm_layer(planes * self.expansion)
+        
+        # self.relu = nn.ReLU(inplace=True)
+        if relu is None:
+            self.relu = nn.ReLU(inplace=True)
+        elif relu == 'leaky':
+            self.relu = nn.LeakyReLU(inplace=True)
+        elif relu == 'prelu':
+            self.relu = nn.PReLU()
+        else:
+            raise ValueError(f"not supported activation function: {relu}")
+            
+        self.downsample = downsample
+        self.stride = stride
+
+    def forward(self, x: Tensor) -> Tensor:
+        identity = x
+
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = self.relu(out)
+
+        out = self.conv2(out)
+        out = self.bn2(out)
+        out = self.relu(out)
+
+        out = self.conv3(out)
+        out = self.bn3(out)
+
+        if self.downsample is not None:
+            identity = self.downsample(x)
+
+        out += identity
+        out = self.relu(out)
+
+        return out
+
+class DeformBottleneck(nn.Module):
+    # Bottleneck in torchvision places the stride for downsampling at 3x3 convolution(self.conv2)
+    # while original implementation places the stride at the first 1x1 convolution(self.conv1)
+    # according to "Deep residual learning for image recognition"https://arxiv.org/abs/1512.03385.
+    # This variant is also known as ResNet V1.5 and improves accuracy according to
+    # https://ngc.nvidia.com/catalog/model-scripts/nvidia:resnet_50_v1_5_for_pytorch.
+
+    expansion: int = 4
+
+    def __init__(
+        self,
+        inplanes: int,
+        planes: int,
+        stride: int = 1,
+        downsample: Optional[nn.Module] = None,
+        groups: int = 1,
+        base_width: int = 64,
+        dilation: int = 1,
+        norm_layer: Optional[Callable[..., nn.Module]] = None
+    ) -> None:
+        super(DeformBottleneck, self).__init__()
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
         width = int(planes * (base_width / 64.)) * groups
@@ -128,8 +268,8 @@ class Bottleneck(nn.Module):
         return out
 
 
-class ResNet(nn.Module):
 
+class ResNet(nn.Module):
     def __init__(
         self,
         block: Type[Union[BasicBlock, Bottleneck]],
@@ -138,9 +278,14 @@ class ResNet(nn.Module):
         groups: int = 1,
         width_per_group: int = 64,
         replace_stride_with_dilation: Optional[List[bool]] = None,
-        norm_layer: Optional[Callable[..., nn.Module]] = None
+        norm_layer: Optional[Callable[..., nn.Module]] = None,
+        **kwargs
     ) -> None:
         super(ResNet, self).__init__()
+        if 'deform_layers' in kwargs:
+            if kwargs['deform_layers'] is None:
+                deform_layers = [False for _ in range(len(layers))]
+        
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
         self._norm_layer = norm_layer
@@ -157,15 +302,23 @@ class ResNet(nn.Module):
         self.groups = groups
         self.base_width = width_per_group
         
-        self.layer1 = self._make_layer(block, 64, layers[0])
-        self.layer2 = self._make_layer(block, 128, layers[1], stride=2,
+        # self.relu = nn.ReLU(inplace=True) if kwargs['relu_type'] is None else kwargs['relu_type']
+        # self.relu = nn.LeakyReLU(inplace=True)
+        # self.relu = nn.ReLU(inplace=True)
+        
+        self.relu_type = kwargs['relu_type'] if 'relu_type' in kwargs else None
+
+        self.in_channels = [64, 128, 256, 512]
+        
+        self.layer1 = self._make_layer(block, self.in_channels[0], layers[0])
+        self.layer2 = self._make_layer(block, self.in_channels[1], layers[1], stride=2,
                                        dilate=replace_stride_with_dilation[0])
-        self.layer3 = self._make_layer(block, 256, layers[2], stride=2,
+        self.layer3 = self._make_layer(block, self.in_channels[2], layers[2], stride=2,
                                        dilate=replace_stride_with_dilation[1])
-        self.layer4 = self._make_layer(block, 512, layers[3], stride=2,
+        self.layer4 = self._make_layer(block, self.in_channels[3], layers[3], stride=2,
                                        dilate=replace_stride_with_dilation[2])
         
-        self.last_out_channel = 512 * block.expansion
+        # self.last_out_channel = 512 * block.expansion
 
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
@@ -197,12 +350,12 @@ class ResNet(nn.Module):
 
         layers = []
         layers.append(block(self.inplanes, planes, stride, downsample, self.groups,
-                            self.base_width, previous_dilation, norm_layer))
+                            self.base_width, previous_dilation, norm_layer, self.relu_type))
         self.inplanes = planes * block.expansion
         for _ in range(1, blocks):
             layers.append(block(self.inplanes, planes, groups=self.groups,
                                 base_width=self.base_width, dilation=self.dilation,
-                                norm_layer=norm_layer))
+                                norm_layer=norm_layer, relu=self.relu_type))
 
         return nn.Sequential(*layers)
 
@@ -232,16 +385,17 @@ def _resnet(
     
     if pretrained:
         if weight_path is not None:
+            print("!!!Load pretrained body weights!!!")
             state_dict = torch.load(weight_path)
-            model.load_state_dict(state_dict)
+            model.load_state_dict(state_dict, strict=True)
+        else:
+            print("!!!Not load pretrained body weights!!!")
     
     return model
 
-# state_dict = load_state_dict_from_url(model_urls[arch],
-#                                       progress=progress)
-
 
 def get_resnet(model, weight_path=None, pretrained=True, **kwargs):
+    
     if model == 'resnet18':
         return resnet18(pretrained=pretrained, weight_path=weight_path, **kwargs)
     elif model == 'resnet34':
@@ -253,7 +407,16 @@ def get_resnet(model, weight_path=None, pretrained=True, **kwargs):
     elif model == 'resnet152':
         return resnet152(pretrained=pretrained, weight_path=weight_path, **kwargs)
 
+    elif model == 'resnext50_32x4d':
+        return resnext50_32x4d(pretrained=pretrained, weight_path=weight_path, **kwargs)
+    
+    elif model == 'wide_resnet50_2':
+        return wide_resnet50_2(pretrained=pretrained, weight_path=weight_path, **kwargs)
+        
 
+    
+    
+    
 
 def resnet18(pretrained: bool = False, progress: bool = True, **kwargs: Any) -> ResNet:
     r"""ResNet-18 model from
@@ -313,12 +476,56 @@ def resnet152(pretrained: bool = False, progress: bool = True, **kwargs: Any) ->
     """
     return _resnet('resnet152', Bottleneck, [3, 8, 36, 3], pretrained, progress,
                    **kwargs)
+
+
+def resnext50_32x4d(pretrained: bool = False, weight_path=None, progress: bool = True, **kwargs: Any) -> ResNet:
+    r"""ResNeXt-50 32x4d model from
+    `"Aggregated Residual Transformation for Deep Neural Networks" <https://arxiv.org/pdf/1611.05431.pdf>`_.
+
+    Args:
+        pretrained (bool): If True, returns a model pre-trained on ImageNet
+        progress (bool): If True, displays a progress bar of the download to stderr
+    """
+    kwargs['groups'] = 32
+    kwargs['width_per_group'] = 4
+    
+    return _resnet(Bottleneck, [3, 4, 6, 3], pretrained, weight_path, progress,
+                   **kwargs)
+
+    
+def wide_resnet50_2(pretrained: bool = False, progress: bool = True, **kwargs: Any) -> ResNet:
+    r"""Wide ResNet-50-2 model from
+    `"Wide Residual Networks" <https://arxiv.org/pdf/1605.07146.pdf>`_.
+
+    The model is the same as ResNet except for the bottleneck number of channels
+    which is twice larger in every block. The number of channels in outer 1x1
+    convolutions is the same, e.g. last block in ResNet-50 has 2048-512-2048
+    channels, and in Wide ResNet-50-2 has 2048-1024-2048.
+
+    Args:
+        pretrained (bool): If True, returns a model pre-trained on ImageNet
+        progress (bool): If True, displays a progress bar of the download to stderr
+    """
+    kwargs['width_per_group'] = 64 * 2
+    return _resnet('wide_resnet50_2', Bottleneck, [3, 4, 6, 3],
+                   pretrained, progress, **kwargs)    
     
     
     
     
+def setting_resnet_args(args, model_args):
+    if 'dilation_type' in args:
+        model_args.update({'dilation_type': args.dilation_type})   
     
+    if 'relu_type' in args:
+        model_args.update({'relu_type': args.relu_type})   
     
+    if 'train_specific_layers' in args:
+        model_args.update({'train_specific_layers': args.train_specific_layers})
+        
+    if 'use_awl' in args:
+        model_args.update({'use_awl': args.use_awl})
     
-    
-    
+    return model_args
+
+

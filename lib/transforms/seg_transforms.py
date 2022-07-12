@@ -7,8 +7,8 @@ import torch
 from torchvision import transforms as T
 from torchvision.transforms import functional as F
 
-import mmcv
-from mmcv.utils import deprecated_api_warning, is_tuple_of
+# import mmcv
+# from mmcv.utils import deprecated_api_warning, is_tuple_of
 
 
 def pad_if_smaller(img, size, fill=0):

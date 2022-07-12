@@ -54,8 +54,11 @@ def get_dataloader(train_dset, test_dset, train_sampler, test_sampler, args, bs,
     '''
     train_loader = torch.utils.data.DataLoader(
         train_dset, batch_size=bs, shuffle=(train_sampler is None),
-        num_workers=args.workers, pin_memory=args.pin_memory, sampler=train_sampler, collate_fn=collate_fn, drop_last=True)
-
+        num_workers=args.workers, pin_memory=args.pin_memory, sampler=train_sampler, collate_fn=collate_fn, drop_last=False)
+    
+    if train_dset.__class__ == torchvision.datasets.CIFAR10:
+        bs = 100
+        
     test_loader = torch.utils.data.DataLoader(
         test_dset, batch_size=bs, shuffle=False,
         num_workers=args.workers, pin_memory=args.pin_memory, sampler=test_sampler, collate_fn=collate_fn)

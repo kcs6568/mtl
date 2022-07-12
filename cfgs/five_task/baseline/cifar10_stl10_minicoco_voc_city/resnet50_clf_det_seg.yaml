@@ -5,6 +5,9 @@ backbone: 'resnet50'
 detector: 'fasterrcnn'
 segmentor: 'fcn'
 
+use_minids: True
+use_neck: True
+
 state_dict: 
   stem: '/root/volume/pre_weights/resnet50_IM1K_only_stem.pth'
   backbone: '/root/volume/pre_weights/resnet50_IM1K_only_layer.pth'
@@ -24,7 +27,6 @@ task_cfg:
     task: 'clf'
     num_classes: 10
     input_size: 96
-    # bs: 1
     stem:
       kernel_size: 1
       stride: 3
@@ -37,7 +39,6 @@ task_cfg:
   voc:
     task: 'seg'
     num_classes: 21
-    # bs: 1
     task_cfg:
       train:
         year: '0712'
@@ -53,21 +54,15 @@ task_cfg:
       in_channels: 2048
       num_classes: 21
       use_aux: True
+  
   cityscapes:
     task: 'seg'
     num_classes: 19
     crop_size: 512
-    use_fpn: False
     stem:
       kernel_size: 7
       stride: 2
       padding: 3
-    backbone:
-      dilation_type: ftt
-      freeze_bn: False
-      return_layer:
-        - 'layer3'
-        - 'layer4'
     head:
       in_channels: 2048
       num_classes: 19

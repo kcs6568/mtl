@@ -1,0 +1,29 @@
+use_minids: True
+setup: 'single_task'
+backbone: 'resnet50'
+detector: 'fasterrcnn'
+segmentor: null
+
+state_dict: 
+  stem: '/root/volume/pre_weights/resnet50_IM1K_only_stem.pth'
+  backbone: '/root/volume/pre_weights/resnet50_IM1K_only_layer.pth'
+  # stem: null
+  # backbone: null
+
+task_cfg:
+  minicoco:
+    task: 'det'
+    num_classes: 91
+    backbone:
+      dilation_type: fff
+      train_allbackbone: False
+      freeze_backbone: False
+      backbone_type: intermediate
+      freeze_bn: True
+      use_fpn: True
+
+epochs: 12
+lr_steps: [8, 11]
+aspect-ratio-group-factor: 3
+print_freq: 50
+

@@ -13,53 +13,74 @@ state_dict:
   # stem: null
   # backbone: null
 
+task_bs: 
+  - 2
+  - 2
+  - 2
+  - 2
+
 task_cfg:
   cifar10:
     task: 'clf'
     num_classes: 10
-    use_fpn: False
     stem:
       kernel_size: 3
       stride: 1
       padding: 1
     backbone:
+      train_allbackbone: True
+      freeze_backbone: False
+      backbone_type: origin
       dilation_type: fff
       freeze_bn: False
+      use_fpn: False
       return_layer:
         - 'layer4'
+    head:
+      in_channel: 2048
 
   stl10:
     task: 'clf'
     num_classes: 10
     input_size: 96
-    use_fpn: False
     stem:
-      kernel_size: 1
-      stride: 3
-      padding: 0
+      kernel_size: 3
+      stride: 1
+      padding: 1
     backbone:
+      train_allbackbone: True
+      freeze_backbone: False
+      backbone_type: origin
       dilation_type: fff
       freeze_bn: False
+      use_fpn: False
       return_layer: 
         - 'layer4'
+    head:
+      in_channel: 2048
 
   minicoco:
     task: 'det'
     num_classes: 91
-    use_fpn: True
+    stem:
+      out_channels: 64
     backbone:
+      train_allbackbone: False
+      freeze_backbone: False
+      backbone_type: intermediate
       dilation_type: fff
       freeze_bn: True
+      use_fpn: True
       return_layer:
         - 'layer1'
         - 'layer2'
         - 'layer3'
         - 'layer4'
+    head: null
   
   voc:
     task: 'seg'
     num_classes: 21
-    use_fpn: False
     task_cfg:
       train:
         year: '0712'
@@ -72,17 +93,22 @@ task_cfg:
       stride: 2
       padding: 3
     backbone:
-      dilation_type: ftt
+      train_allbackbone: True
+      freeze_backbone: False
+      backbone_type: origin
+      dilation_type: fft
       freeze_bn: False
+      use_fpn: False
       return_layer:
         - 'layer3'
         - 'layer4'
     head:
       in_channels: 2048
-      num_classes: 21
       use_aux: True
 
-
+# train_allbackbone: False
+# freeze_backbone: False
+relu_type: leaky
 cross_stitch_kwargs: 
     alpha: 0.9
     beta: 0.1
@@ -92,6 +118,14 @@ cross_stitch_kwargs:
         layer2: 512
         layer3: 1024
         layer4: 2048
+
+task_bs: [2, 2, 2, 2]
+
+loss_ratio:
+  cifar10: 0.1
+  stl10: 0.1
+  minicoco: 0.6
+  voc: 0.2
 
 epochs: 12
 aspect-ratio-group-factor: 3

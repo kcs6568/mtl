@@ -1,0 +1,78 @@
+setup: 'single_task'
+
+backbone: 'mobilenet_v3_large'
+detector: null
+segmentor: null
+
+use_minids: False
+state_dict: 
+  stem: null
+  backbone: '/root/volume/pre_weights/mobilenetv3_IM1K_only_layer.pth'
+  # stem: null
+  # backbone: null
+
+task_cfg:
+  stl10:
+    task: 'clf'
+    num_classes: 10
+    input_size: 96
+    stem:
+      out_channels: 16
+      kernel_size: 3
+      stride: 3
+      padding: 1
+      relu: hardswish
+    backbone:
+      train_allbackbone: True
+      freeze_backbone: False
+      freeze_bn: False
+      backbone_type: intermediate
+      use_fpn: False
+      no_st_early: True
+    head:
+      in_channel: 960
+      middle_channle: 1280
+
+epochs: 150
+lr_steps: [96, 132, 145]
+print_freq: 20
+
+
+
+# task_cfg:
+#   clf:
+#     0:
+#       type: 'cifar10'
+#       num_classes: 10
+#       bs: 4
+#     1:
+#       type: 'stl10'
+#       num_classes: 10
+#       input_size: 96
+#       bs: 4
+#       arch_cfg:
+#         stem:
+#           kernel_size: 1
+#           stride: 3
+#           padding: 0
+
+#   det:
+#     type: 'coco'
+#     num_classes: 91
+#     bs: 3
+  
+#   seg:
+#     type: 'voc'
+#     num_classes: 21
+#     bs: 3
+#     head_cfg:
+#       in_channels: 2048
+#       channels: 21
+#       use_aux: True
+#     task_cfg:
+#       train:
+#         year: '0712'
+#         task: 'trainval'
+#       test:
+#         year: '2007'
+#         task: 'test'

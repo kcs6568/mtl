@@ -1,0 +1,124 @@
+setup: 'multi_task'
+method: 'mtan'
+
+backbone: 'mobilenet_v3_large'
+detector: 'fasterrcnn'
+segmentor: 'fcn'
+
+use_minids: True
+
+state_dict: 
+  # stem: null
+  # backbone: null
+  stem: /root/volume/pre_weights/mobilenetv3_IM1K_only_stem.pth
+  backbone: /root/volume/pre_weights/mobilenetv3_IM1K_only_layer.pth
+
+task_cfg:
+  cifar10:
+    task: 'clf'
+    num_classes: 10
+    stem:
+      out_channels: 16
+      kernel_size: 3
+      stride: 1
+      padding: 1
+      relu: hardswish
+    head:
+      in_channel: 960 
+      middle_channle: 1280
+
+  stl10:
+    task: 'clf'
+    num_classes: 10
+    input_size: 96
+    stem:
+      out_channels: 16
+      kernel_size: 3
+      stride: 1
+      padding: 1
+      relu: hardswish
+    head:
+      in_channel: 960
+      middle_channle: 1280
+
+  minicoco:
+    task: 'det'
+    num_classes: 91
+    stem:
+      out_channels: 16
+      kernel_size: 3
+      stride: 2
+      padding: 1
+      use_maxpool: False
+      relu: hardswish
+    head: null
+  
+  voc:
+    task: 'seg'
+    num_classes: 21
+    task_cfg:
+      train:
+        year: '0712'
+        task: 'trainval'
+      test:
+        year: '2007'
+        task: 'test'
+    stem:
+      out_channels: 16
+      kernel_size: 3
+      stride: 2
+      padding: 1
+      use_maxpool: False
+      relu: hardswish
+    head:
+      in_channels: 960
+      use_aux: True
+      aux_channel: 80
+
+task_bs: 
+  - 4
+  - 4
+  - 2
+  - 2
+
+dilated: False
+freeze_bn: True
+train_allbackbone: True
+freeze_backbone: False
+no_st_early: True
+
+mtan_kwargs: 
+  # layers in the previous striding layer
+  attention_stages: 
+    - '5'
+    - '11'
+    - '14'
+
+  # channels in the previous striding layers
+  attention_channels:
+    - 40
+    - 112
+    - 160
+    - 960
+
+  det_idx:
+      - 'minicoco'
+      - '1'
+      - '2'
+  seg_idx:
+      - 'voc'
+      - '1'
+  dense_task:
+    - 'minicoco'
+    - 'voc'
+
+loss_ratio:
+  cifar10: 0.2
+  stl10: 0.1
+  minicoco: 0.5
+  voc: 0.2
+
+epochs: 12
+aspect-ratio-group-factor: 3
+print_freq: 50
+
